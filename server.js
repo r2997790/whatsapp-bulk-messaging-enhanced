@@ -28,27 +28,12 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Initialize WhatsApp client
-const client = new Client({
-  authStrategy: new LocalAuth(),
-  puppeteer: {
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      '--single-process',
-      '--disable-gpu'
-    ]
-  }
-});
-
+// Initialize WhatsApp client with better Puppeteer configuration
+let client = null;
 let qrCodeData = null;
 let isClientReady = false;
 let messageStats = { sent: 0, failed: 0, total: 0 };
+let clientError = null;
 
 // In-memory storage for templates and contacts (in production, use a database)
 let templates = [
@@ -104,26 +89,82 @@ let contactGroups = [
   }
 ];
 
-// WhatsApp client events
-client.on('qr', async (qr) => {
-  console.log('QR Code received');
-  qrCodeData = await qrcode.toDataURL(qr);
-});
+// Initialize WhatsApp client with error handling
+function initializeWhatsAppClient() {
+  try {
+    // Puppeteer configuration for different environments
+    const puppeteerConfig = {
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--single-process',
+        '--disable-gpu',
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor'
+      ]
+    };
 
-client.on('ready', () => {
-  console.log('WhatsApp client is ready!');
-  isClientReady = true;
-  qrCodeData = null;
-});
+    // Use system Chrome if available (for Railway deployment)
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      puppeteerConfig.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
 
-client.on('disconnected', (reason) => {
-  console.log('Client was logged out', reason);
-  isClientReady = false;
-  qrCodeData = null;
-});
+    client = new Client({
+      authStrategy: new LocalAuth({
+        dataPath: './whatsapp-session'
+      }),
+      puppeteer: puppeteerConfig,
+      webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+      }
+    });
 
-// Initialize client
-client.initialize();
+    // WhatsApp client events
+    client.on('qr', async (qr) => {
+      console.log('QR Code received');
+      try {
+        qrCodeData = await qrcode.toDataURL(qr);
+      } catch (error) {
+        console.error('Error generating QR code:', error);
+        qrCodeData = null;
+      }
+    });
+
+    client.on('ready', () => {
+      console.log('WhatsApp client is ready!');
+      isClientReady = true;
+      qrCodeData = null;
+      clientError = null;
+    });
+
+    client.on('disconnected', (reason) => {
+      console.log('Client was logged out', reason);
+      isClientReady = false;
+      qrCodeData = null;
+    });
+
+    client.on('auth_failure', (msg) => {
+      console.error('Authentication failure:', msg);
+      clientError = 'Authentication failed: ' + msg;
+    });
+
+    // Initialize client
+    client.initialize().catch(error => {
+      console.error('Failed to initialize WhatsApp client:', error);
+      clientError = 'Failed to initialize WhatsApp client: ' + error.message;
+    });
+
+  } catch (error) {
+    console.error('Error setting up WhatsApp client:', error);
+    clientError = 'Error setting up WhatsApp client: ' + error.message;
+  }
+}
 
 // Utility functions
 function replaceTemplateVariables(template, variables) {
@@ -149,7 +190,8 @@ app.get('/status', (req, res) => {
   res.json({
     isReady: isClientReady,
     qrCode: qrCodeData,
-    stats: messageStats
+    stats: messageStats,
+    error: clientError
   });
 });
 
@@ -277,7 +319,9 @@ app.delete('/api/groups/:id', (req, res) => {
 // Message sending routes
 app.post('/send-message', upload.single('attachment'), async (req, res) => {
   if (!isClientReady) {
-    return res.status(400).json({ error: 'WhatsApp client is not ready' });
+    return res.status(400).json({ 
+      error: clientError || 'WhatsApp client is not ready. Please scan the QR code first.' 
+    });
   }
 
   try {
@@ -354,7 +398,9 @@ app.post('/send-message', upload.single('attachment'), async (req, res) => {
 // Bulk message with template
 app.post('/send-bulk-template', async (req, res) => {
   if (!isClientReady) {
-    return res.status(400).json({ error: 'WhatsApp client is not ready' });
+    return res.status(400).json({ 
+      error: clientError || 'WhatsApp client is not ready. Please scan the QR code first.' 
+    });
   }
 
   try {
@@ -402,6 +448,24 @@ app.post('/send-bulk-template', async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    whatsapp: {
+      ready: isClientReady,
+      error: clientError
+    }
+  });
+});
+
+// Start server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  
+  // Initialize WhatsApp client after server starts
+  setTimeout(() => {
+    initializeWhatsAppClient();
+  }, 2000);
 });
