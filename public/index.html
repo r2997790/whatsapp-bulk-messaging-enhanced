@@ -1,0 +1,614 @@
+            // Load data for specific sections
+            if (sectionName === 'templates') {
+                loadTemplates();
+            } else if (sectionName === 'contacts') {
+                loadContacts();
+            } else if (sectionName === 'groups') {
+                loadGroups();
+            } else if (sectionName === 'analytics') {
+                updateAnalytics();
+            }
+        }
+
+        function selectMessageType(type) {
+            currentMessageType = type;
+            
+            document.querySelectorAll('.message-type').forEach(el => {
+                el.classList.remove('active');
+            });
+            
+            event.target.closest('.message-type').classList.add('active');
+            
+            const phoneInput = document.getElementById('phone');
+            if (type === 'single') {
+                phoneInput.placeholder = 'Enter phone number with country code (e.g., 1234567890)';
+            } else {
+                phoneInput.placeholder = 'Enter multiple numbers separated by commas';
+            }
+        }
+
+        function handleFileSelect(input) {
+            const file = input.files[0];
+            const selectedFileDiv = document.getElementById('selectedFile');
+            
+            if (file) {
+                selectedFile = file;
+                selectedFileDiv.innerHTML = `
+                    <div style="display: flex; align-items: center; background: #e8f5e8; padding: 10px; border-radius: 8px;">
+                        <i class="fas fa-file" style="margin-right: 10px; color: #28a745;"></i>
+                        <span>${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)</span>
+                        <button type="button" onclick="clearFile()" style="margin-left: auto; background: none; border: none; color: #dc3545; cursor: pointer;">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                `;
+                selectedFileDiv.style.display = 'block';
+            }
+        }
+
+        function clearFile() {
+            selectedFile = null;
+            document.getElementById('attachment').value = '';
+            document.getElementById('selectedFile').style.display = 'none';
+        }
+
+        // Message form submission
+        document.getElementById('messageForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const phone = document.getElementById('phone').value;
+            const message = document.getElementById('message').value;
+            const templateId = document.getElementById('templateSelect').value;
+            
+            if (!phone || !message) {
+                showAlert('Please fill in all required fields', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('phone', phone);
+            formData.append('message', message);
+            
+            if (templateId) {
+                formData.append('templateId', templateId);
+                
+                // Collect template variables
+                const variables = {};
+                const variableInputs = document.querySelectorAll('#variableInputs input');
+                variableInputs.forEach(input => {
+                    variables[input.name] = input.value;
+                });
+                formData.append('templateVariables', JSON.stringify(variables));
+            }
+            
+            if (selectedFile) {
+                formData.append('attachment', selectedFile);
+            }
+
+            // Show loading
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('sendBtn').disabled = true;
+
+            try {
+                const response = await fetch('/send-message', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    showAlert(`Messages sent successfully! Sent: ${result.stats.sent}, Failed: ${result.stats.failed}`, 'success');
+                    document.getElementById('messageForm').reset();
+                    clearFile();
+                } else {
+                    showAlert(result.error || 'Failed to send messages', 'error');
+                }
+            } catch (error) {
+                showAlert('Network error: ' + error.message, 'error');
+            } finally {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('sendBtn').disabled = false;
+            }
+        });
+
+        function showAlert(message, type) {
+            const alertId = type === 'success' ? 'successAlert' : 'errorAlert';
+            const alert = document.getElementById(alertId);
+            alert.textContent = message;
+            alert.style.display = 'block';
+            
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+
+        // Template functions
+        async function loadTemplates() {
+            try {
+                const response = await fetch('/api/templates');
+                templates = await response.json();
+                renderTemplates();
+                updateTemplateSelect();
+            } catch (error) {
+                console.error('Failed to load templates:', error);
+            }
+        }
+
+        function renderTemplates() {
+            const container = document.getElementById('templatesList');
+            
+            if (templates.length === 0) {
+                container.innerHTML = `
+                    <div class="card">
+                        <p style="text-align: center; color: #666; margin: 40px 0;">
+                            <i class="fas fa-file-alt" style="font-size: 3rem; margin-bottom: 15px; display: block; color: #ddd;"></i>
+                            No templates created yet. Click "New Template" to get started.
+                        </p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = templates.map(template => `
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">${template.name}</h3>
+                        <div class="card-actions">
+                            <button class="btn btn-small" onclick="editTemplate(${template.id})">
+                                <i class="fas fa-edit"></i> Edit
+                            </button>
+                            <button class="btn btn-small btn-danger" onclick="deleteTemplate(${template.id})">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                    <p style="margin-bottom: 10px;">${template.content}</p>
+                    <div>
+                        ${template.variables.map(v => `<span class="tag">${v}</span>`).join('')}
+                    </div>
+                    <small style="color: #666; margin-top: 10px; display: block;">
+                        Created: ${new Date(template.createdAt).toLocaleDateString()}
+                    </small>
+                </div>
+            `).join('');
+        }
+
+        function updateTemplateSelect() {
+            const select = document.getElementById('templateSelect');
+            select.innerHTML = '<option value="">Select a template...</option>' +
+                templates.map(template => `<option value="${template.id}">${template.name}</option>`).join('');
+        }
+
+        function handleTemplateSelect() {
+            const templateId = document.getElementById('templateSelect').value;
+            const messageTextarea = document.getElementById('message');
+            const variablesDiv = document.getElementById('templateVariables');
+            const variableInputsDiv = document.getElementById('variableInputs');
+
+            if (templateId) {
+                const template = templates.find(t => t.id == templateId);
+                if (template) {
+                    messageTextarea.value = template.content;
+                    
+                    if (template.variables.length > 0) {
+                        variableInputsDiv.innerHTML = template.variables.map(variable => `
+                            <div class="variable-input">
+                                <label style="margin-bottom: 5px; font-weight: 500;">${variable}:</label>
+                                <input type="text" name="${variable}" class="form-control" placeholder="Enter ${variable}">
+                            </div>
+                        `).join('');
+                        variablesDiv.style.display = 'block';
+                    } else {
+                        variablesDiv.style.display = 'none';
+                    }
+                }
+            } else {
+                messageTextarea.value = '';
+                variablesDiv.style.display = 'none';
+            }
+        }
+
+        function openTemplateModal(template = null) {
+            const modal = document.getElementById('templateModal');
+            const form = document.getElementById('templateForm');
+            
+            if (template) {
+                document.getElementById('templateId').value = template.id;
+                document.getElementById('templateName').value = template.name;
+                document.getElementById('templateContent').value = template.content;
+            } else {
+                form.reset();
+                document.getElementById('templateId').value = '';
+            }
+            
+            modal.style.display = 'block';
+            updateTemplateVariables();
+        }
+
+        function closeTemplateModal() {
+            document.getElementById('templateModal').style.display = 'none';
+        }
+
+        function updateTemplateVariables() {
+            const content = document.getElementById('templateContent').value;
+            const variables = [...content.matchAll(/{{(.*?)}}/g)].map(match => match[1].trim());
+            const uniqueVariables = [...new Set(variables)];
+            
+            const container = document.getElementById('templateVariablesList');
+            if (uniqueVariables.length > 0) {
+                container.innerHTML = uniqueVariables.map(variable => `
+                    <div class="template-variable">
+                        <span>{{${variable}}}</span>
+                    </div>
+                `).join('');
+            } else {
+                container.innerHTML = '<p style="color: #666;">No variables detected</p>';
+            }
+        }
+
+        document.getElementById('templateContent').addEventListener('input', updateTemplateVariables);
+
+        document.getElementById('templateForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const templateId = document.getElementById('templateId').value;
+            const name = document.getElementById('templateName').value;
+            const content = document.getElementById('templateContent').value;
+            const variables = [...content.matchAll(/{{(.*?)}}/g)].map(match => match[1].trim());
+            const uniqueVariables = [...new Set(variables)];
+            
+            const templateData = {
+                name,
+                content,
+                variables: uniqueVariables
+            };
+
+            try {
+                const url = templateId ? `/api/templates/${templateId}` : '/api/templates';
+                const method = templateId ? 'PUT' : 'POST';
+                
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(templateData)
+                });
+
+                if (response.ok) {
+                    closeTemplateModal();
+                    loadTemplates();
+                    showAlert(`Template ${templateId ? 'updated' : 'created'} successfully!`, 'success');
+                }
+            } catch (error) {
+                showAlert('Failed to save template: ' + error.message, 'error');
+            }
+        });
+
+        function editTemplate(id) {
+            const template = templates.find(t => t.id === id);
+            if (template) {
+                openTemplateModal(template);
+            }
+        }
+
+        async function deleteTemplate(id) {
+            if (confirm('Are you sure you want to delete this template?')) {
+                try {
+                    const response = await fetch(`/api/templates/${id}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        loadTemplates();
+                        showAlert('Template deleted successfully!', 'success');
+                    }
+                } catch (error) {
+                    showAlert('Failed to delete template: ' + error.message, 'error');
+                }
+            }
+        }
+
+        // Contact functions
+        async function loadContacts() {
+            try {
+                const response = await fetch('/api/contacts');
+                contacts = await response.json();
+                renderContacts();
+                updateContactCheckboxes();
+            } catch (error) {
+                console.error('Failed to load contacts:', error);
+            }
+        }
+
+        function renderContacts() {
+            const container = document.getElementById('contactsList');
+            
+            if (contacts.length === 0) {
+                container.innerHTML = `
+                    <div class="card">
+                        <p style="text-align: center; color: #666; margin: 40px 0;">
+                            <i class="fas fa-address-book" style="font-size: 3rem; margin-bottom: 15px; display: block; color: #ddd;"></i>
+                            No contacts added yet. Click "New Contact" to get started.
+                        </p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="card">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Phone</th>
+                                <th>Email</th>
+                                <th>Tags</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${contacts.map(contact => `
+                                <tr>
+                                    <td><strong>${contact.name}</strong></td>
+                                    <td>${contact.phone}</td>
+                                    <td>${contact.email || '-'}</td>
+                                    <td>${contact.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}</td>
+                                    <td>
+                                        <button class="btn btn-small" onclick="editContact(${contact.id})">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button class="btn btn-small btn-danger" onclick="deleteContact(${contact.id})">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        function openContactModal(contact = null) {
+            const modal = document.getElementById('contactModal');
+            const form = document.getElementById('contactForm');
+            
+            if (contact) {
+                document.getElementById('contactId').value = contact.id;
+                document.getElementById('contactName').value = contact.name;
+                document.getElementById('contactPhone').value = contact.phone;
+                document.getElementById('contactEmail').value = contact.email || '';
+                document.getElementById('contactTags').value = contact.tags.join(', ');
+            } else {
+                form.reset();
+                document.getElementById('contactId').value = '';
+            }
+            
+            modal.style.display = 'block';
+        }
+
+        function closeContactModal() {
+            document.getElementById('contactModal').style.display = 'none';
+        }
+
+        document.getElementById('contactForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const contactId = document.getElementById('contactId').value;
+            const name = document.getElementById('contactName').value;
+            const phone = document.getElementById('contactPhone').value;
+            const email = document.getElementById('contactEmail').value;
+            const tags = document.getElementById('contactTags').value.split(',').map(tag => tag.trim()).filter(tag => tag);
+            
+            const contactData = { name, phone, email, tags };
+
+            try {
+                const url = contactId ? `/api/contacts/${contactId}` : '/api/contacts';
+                const method = contactId ? 'PUT' : 'POST';
+                
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(contactData)
+                });
+
+                if (response.ok) {
+                    closeContactModal();
+                    loadContacts();
+                    showAlert(`Contact ${contactId ? 'updated' : 'created'} successfully!`, 'success');
+                }
+            } catch (error) {
+                showAlert('Failed to save contact: ' + error.message, 'error');
+            }
+        });
+
+        function editContact(id) {
+            const contact = contacts.find(c => c.id === id);
+            if (contact) {
+                openContactModal(contact);
+            }
+        }
+
+        async function deleteContact(id) {
+            if (confirm('Are you sure you want to delete this contact?')) {
+                try {
+                    const response = await fetch(`/api/contacts/${id}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        loadContacts();
+                        showAlert('Contact deleted successfully!', 'success');
+                    }
+                } catch (error) {
+                    showAlert('Failed to delete contact: ' + error.message, 'error');
+                }
+            }
+        }
+
+        // Group functions
+        async function loadGroups() {
+            try {
+                const response = await fetch('/api/groups');
+                groups = await response.json();
+                renderGroups();
+            } catch (error) {
+                console.error('Failed to load groups:', error);
+            }
+        }
+
+        function renderGroups() {
+            const container = document.getElementById('groupsList');
+            
+            if (groups.length === 0) {
+                container.innerHTML = `
+                    <div class="card">
+                        <p style="text-align: center; color: #666; margin: 40px 0;">
+                            <i class="fas fa-users" style="font-size: 3rem; margin-bottom: 15px; display: block; color: #ddd;"></i>
+                            No groups created yet. Click "New Group" to get started.
+                        </p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = groups.map(group => {
+                const groupContacts = group.contacts.map(contactId => {
+                    const contact = contacts.find(c => c.id === contactId);
+                    return contact ? contact.name : 'Unknown';
+                });
+
+                return `
+                    <div class="card">
+                        <div class="card-header">
+                            <h3 class="card-title">${group.name}</h3>
+                            <div class="card-actions">
+                                <button class="btn btn-small" onclick="editGroup(${group.id})">
+                                    <i class="fas fa-edit"></i> Edit
+                                </button>
+                                <button class="btn btn-small btn-danger" onclick="deleteGroup(${group.id})">
+                                    <i class="fas fa-trash"></i> Delete
+                                </button>
+                            </div>
+                        </div>
+                        <p style="margin-bottom: 10px;">${group.description || 'No description'}</p>
+                        <p><strong>Members (${groupContacts.length}):</strong> ${groupContacts.join(', ') || 'No members'}</p>
+                        <small style="color: #666; margin-top: 10px; display: block;">
+                            Created: ${new Date(group.createdAt).toLocaleDateString()}
+                        </small>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function updateContactCheckboxes() {
+            const container = document.getElementById('contactCheckboxes');
+            if (contacts.length === 0) {
+                container.innerHTML = '<p style="color: #666;">No contacts available. Create contacts first.</p>';
+                return;
+            }
+
+            container.innerHTML = contacts.map(contact => `
+                <div style="margin-bottom: 10px;">
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" value="${contact.id}" style="margin-right: 10px;">
+                        <span><strong>${contact.name}</strong> (${contact.phone})</span>
+                    </label>
+                </div>
+            `).join('');
+        }
+
+        function openGroupModal(group = null) {
+            const modal = document.getElementById('groupModal');
+            const form = document.getElementById('groupForm');
+            
+            updateContactCheckboxes();
+            
+            if (group) {
+                document.getElementById('groupId').value = group.id;
+                document.getElementById('groupName').value = group.name;
+                document.getElementById('groupDescription').value = group.description || '';
+                
+                // Check the contacts that belong to this group
+                group.contacts.forEach(contactId => {
+                    const checkbox = document.querySelector(`#contactCheckboxes input[value="${contactId}"]`);
+                    if (checkbox) checkbox.checked = true;
+                });
+            } else {
+                form.reset();
+                document.getElementById('groupId').value = '';
+            }
+            
+            modal.style.display = 'block';
+        }
+
+        function closeGroupModal() {
+            document.getElementById('groupModal').style.display = 'none';
+        }
+
+        document.getElementById('groupForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const groupId = document.getElementById('groupId').value;
+            const name = document.getElementById('groupName').value;
+            const description = document.getElementById('groupDescription').value;
+            
+            const selectedContacts = Array.from(document.querySelectorAll('#contactCheckboxes input:checked'))
+                .map(checkbox => parseInt(checkbox.value));
+            
+            const groupData = { name, description, contacts: selectedContacts };
+
+            try {
+                const url = groupId ? `/api/groups/${groupId}` : '/api/groups';
+                const method = groupId ? 'PUT' : 'POST';
+                
+                const response = await fetch(url, {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(groupData)
+                });
+
+                if (response.ok) {
+                    closeGroupModal();
+                    loadGroups();
+                    showAlert(`Group ${groupId ? 'updated' : 'created'} successfully!`, 'success');
+                }
+            } catch (error) {
+                showAlert('Failed to save group: ' + error.message, 'error');
+            }
+        });
+
+        function editGroup(id) {
+            const group = groups.find(g => g.id === id);
+            if (group) {
+                openGroupModal(group);
+            }
+        }
+
+        async function deleteGroup(id) {
+            if (confirm('Are you sure you want to delete this group?')) {
+                try {
+                    const response = await fetch(`/api/groups/${id}`, { method: 'DELETE' });
+                    if (response.ok) {
+                        loadGroups();
+                        showAlert('Group deleted successfully!', 'success');
+                    }
+                } catch (error) {
+                    showAlert('Failed to delete group: ' + error.message, 'error');
+                }
+            }
+        }
+
+        function updateAnalytics() {
+            document.getElementById('totalTemplates').textContent = templates.length;
+            document.getElementById('totalContacts').textContent = contacts.length;
+            // Total messages sent would come from server stats
+        }
+
+        // Close modals when clicking outside
+        window.onclick = function(event) {
+            const modals = document.querySelectorAll('.modal');
+            modals.forEach(modal => {
+                if (event.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
+        }
+    </script>
+</body>
+</html>
