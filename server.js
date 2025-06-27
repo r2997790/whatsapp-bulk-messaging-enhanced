@@ -1,5 +1,4 @@
 const express = require('express');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const multer = require('multer');
 const path = require('path');
@@ -28,14 +27,15 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Initialize WhatsApp client with better Puppeteer configuration
+// Global state
 let client = null;
 let qrCodeData = null;
 let isClientReady = false;
 let messageStats = { sent: 0, failed: 0, total: 0 };
 let clientError = null;
+let isWhatsAppAvailable = false;
 
-// In-memory storage for templates and contacts (in production, use a database)
+// In-memory storage for templates and contacts
 let templates = [
   {
     id: 1,
@@ -90,8 +90,13 @@ let contactGroups = [
 ];
 
 // Initialize WhatsApp client with error handling
-function initializeWhatsAppClient() {
+async function initializeWhatsAppClient() {
   try {
+    console.log('Attempting to initialize WhatsApp client...');
+    
+    // Try to load whatsapp-web.js
+    const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+    
     // Puppeteer configuration for different environments
     const puppeteerConfig = {
       headless: true,
@@ -141,6 +146,7 @@ function initializeWhatsAppClient() {
       isClientReady = true;
       qrCodeData = null;
       clientError = null;
+      isWhatsAppAvailable = true;
     });
 
     client.on('disconnected', (reason) => {
@@ -155,14 +161,20 @@ function initializeWhatsAppClient() {
     });
 
     // Initialize client
-    client.initialize().catch(error => {
-      console.error('Failed to initialize WhatsApp client:', error);
-      clientError = 'Failed to initialize WhatsApp client: ' + error.message;
-    });
-
+    await client.initialize();
+    isWhatsAppAvailable = true;
+    
   } catch (error) {
-    console.error('Error setting up WhatsApp client:', error);
-    clientError = 'Error setting up WhatsApp client: ' + error.message;
+    console.error('WhatsApp client initialization failed:', error);
+    clientError = 'WhatsApp functionality unavailable: ' + error.message;
+    isWhatsAppAvailable = false;
+    
+    // Generate a demo QR code for UI testing
+    try {
+      qrCodeData = await qrcode.toDataURL('Demo mode - WhatsApp not available in this environment');
+    } catch (qrError) {
+      console.error('Failed to generate demo QR code:', qrError);
+    }
   }
 }
 
@@ -191,7 +203,8 @@ app.get('/status', (req, res) => {
     isReady: isClientReady,
     qrCode: qrCodeData,
     stats: messageStats,
-    error: clientError
+    error: clientError,
+    whatsappAvailable: isWhatsAppAvailable
   });
 });
 
@@ -318,9 +331,9 @@ app.delete('/api/groups/:id', (req, res) => {
 
 // Message sending routes
 app.post('/send-message', upload.single('attachment'), async (req, res) => {
-  if (!isClientReady) {
+  if (!isWhatsAppAvailable || !isClientReady) {
     return res.status(400).json({ 
-      error: clientError || 'WhatsApp client is not ready. Please scan the QR code first.' 
+      error: clientError || 'WhatsApp client is not available or not ready. This is likely due to hosting environment limitations.'
     });
   }
 
@@ -351,6 +364,7 @@ app.post('/send-message', upload.single('attachment'), async (req, res) => {
 
     let media = null;
     if (req.file) {
+      const { MessageMedia } = require('whatsapp-web.js');
       media = MessageMedia.fromFilePath(req.file.path);
     }
 
@@ -397,9 +411,9 @@ app.post('/send-message', upload.single('attachment'), async (req, res) => {
 
 // Bulk message with template
 app.post('/send-bulk-template', async (req, res) => {
-  if (!isClientReady) {
+  if (!isWhatsAppAvailable || !isClientReady) {
     return res.status(400).json({ 
-      error: clientError || 'WhatsApp client is not ready. Please scan the QR code first.' 
+      error: clientError || 'WhatsApp client is not available or not ready. This is likely due to hosting environment limitations.'
     });
   }
 
@@ -454,15 +468,35 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     timestamp: new Date().toISOString(),
     whatsapp: {
+      available: isWhatsAppAvailable,
       ready: isClientReady,
       error: clientError
     }
   });
 });
 
+// Demo mode endpoint for testing UI without WhatsApp
+app.post('/demo-message', (req, res) => {
+  const { phone, message } = req.body;
+  
+  // Simulate message sending
+  setTimeout(() => {
+    messageStats.sent++;
+    messageStats.total++;
+    
+    res.json({
+      success: true,
+      results: [{ phone, status: 'demo-sent' }],
+      stats: messageStats,
+      message: 'Demo mode: Message simulated (WhatsApp not available)'
+    });
+  }, 1000);
+});
+
 // Start server
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
   // Initialize WhatsApp client after server starts
   setTimeout(() => {
