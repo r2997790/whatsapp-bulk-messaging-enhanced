@@ -50,6 +50,13 @@ let templates = [
     content: 'Hi {{name}}, this is a friendly reminder about {{event}} scheduled for {{date}}.',
     variables: ['name', 'event', 'date'],
     createdAt: new Date().toISOString()
+  },
+  {
+    id: 3,
+    name: 'Thank You',
+    content: 'Thank you {{name}} for your recent purchase! We appreciate your business.',
+    variables: ['name'],
+    createdAt: new Date().toISOString()
   }
 ];
 
@@ -69,6 +76,14 @@ let contacts = [
     email: 'jane@example.com',
     tags: ['prospect'],
     createdAt: new Date().toISOString()
+  },
+  {
+    id: 3,
+    name: 'Bob Johnson',
+    phone: '5555551234',
+    email: 'bob@example.com',
+    tags: ['customer'],
+    createdAt: new Date().toISOString()
   }
 ];
 
@@ -86,16 +101,26 @@ let contactGroups = [
     description: 'Potential customers',
     contacts: [2],
     createdAt: new Date().toISOString()
+  },
+  {
+    id: 3,
+    name: 'All Customers',
+    description: 'All customer contacts',
+    contacts: [1, 3],
+    createdAt: new Date().toISOString()
   }
 ];
 
-// Initialize WhatsApp client with error handling
+// Try to initialize WhatsApp client
 async function initializeWhatsAppClient() {
   try {
     console.log('Attempting to initialize WhatsApp client...');
     
-    // Try to load whatsapp-web.js
-    const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+    // Try to require whatsapp-web.js (might fail in some environments)
+    const WhatsAppWeb = require('whatsapp-web.js');
+    const { Client, LocalAuth, MessageMedia } = WhatsAppWeb;
+    
+    console.log('WhatsApp Web.js loaded successfully');
     
     // Puppeteer configuration for different environments
     const puppeteerConfig = {
@@ -135,6 +160,7 @@ async function initializeWhatsAppClient() {
       console.log('QR Code received');
       try {
         qrCodeData = await qrcode.toDataURL(qr);
+        console.log('QR Code generated successfully');
       } catch (error) {
         console.error('Error generating QR code:', error);
         qrCodeData = null;
@@ -161,17 +187,20 @@ async function initializeWhatsAppClient() {
     });
 
     // Initialize client
+    console.log('Starting WhatsApp client initialization...');
     await client.initialize();
     isWhatsAppAvailable = true;
+    console.log('WhatsApp client initialized successfully');
     
   } catch (error) {
-    console.error('WhatsApp client initialization failed:', error);
-    clientError = 'WhatsApp functionality unavailable: ' + error.message;
+    console.error('WhatsApp client initialization failed:', error.message);
+    clientError = `WhatsApp functionality unavailable: ${error.message}. Running in demo mode.`;
     isWhatsAppAvailable = false;
     
     // Generate a demo QR code for UI testing
     try {
-      qrCodeData = await qrcode.toDataURL('Demo mode - WhatsApp not available in this environment');
+      qrCodeData = await qrcode.toDataURL('Demo mode - WhatsApp not available in this environment. The UI is fully functional for testing templates, contacts, and groups.');
+      console.log('Generated demo QR code for UI testing');
     } catch (qrError) {
       console.error('Failed to generate demo QR code:', qrError);
     }
@@ -332,9 +361,35 @@ app.delete('/api/groups/:id', (req, res) => {
 // Message sending routes
 app.post('/send-message', upload.single('attachment'), async (req, res) => {
   if (!isWhatsAppAvailable || !isClientReady) {
-    return res.status(400).json({ 
-      error: clientError || 'WhatsApp client is not available or not ready. This is likely due to hosting environment limitations.'
-    });
+    // Demo mode - simulate message sending
+    const { phone, message } = req.body;
+    let phoneNumbers = [];
+    
+    if (phone.includes(',')) {
+      phoneNumbers = phone.split(',').map(p => p.trim());
+    } else {
+      phoneNumbers = [phone];
+    }
+
+    // Simulate delay and success
+    setTimeout(() => {
+      messageStats.total = phoneNumbers.length;
+      messageStats.sent = phoneNumbers.length;
+      messageStats.failed = 0;
+
+      const results = phoneNumbers.map(phoneNumber => ({
+        phone: phoneNumber,
+        status: 'demo-sent'
+      }));
+
+      res.json({
+        success: true,
+        results,
+        stats: messageStats,
+        message: 'Demo mode: Messages simulated (WhatsApp not available in this environment)'
+      });
+    }, 1500);
+    return;
   }
 
   try {
@@ -413,7 +468,7 @@ app.post('/send-message', upload.single('attachment'), async (req, res) => {
 app.post('/send-bulk-template', async (req, res) => {
   if (!isWhatsAppAvailable || !isClientReady) {
     return res.status(400).json({ 
-      error: clientError || 'WhatsApp client is not available or not ready. This is likely due to hosting environment limitations.'
+      error: 'Demo mode: WhatsApp client is not available. Use the regular send message form to test the interface.'
     });
   }
 
@@ -471,6 +526,11 @@ app.get('/health', (req, res) => {
       available: isWhatsAppAvailable,
       ready: isClientReady,
       error: clientError
+    },
+    features: {
+      templates: templates.length,
+      contacts: contacts.length,
+      groups: contactGroups.length
     }
   });
 });
@@ -493,13 +553,24 @@ app.post('/demo-message', (req, res) => {
   }, 1000);
 });
 
+// Error handling middleware
+app.use((error, req, res, next) => {
+  console.error('Server error:', error);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: error.message 
+  });
+});
+
 // Start server
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 Server running on port ${port}`);
+  console.log(`📱 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🌐 Access at: http://localhost:${port}`);
   
   // Initialize WhatsApp client after server starts
   setTimeout(() => {
+    console.log('🔄 Initializing WhatsApp client...');
     initializeWhatsAppClient();
   }, 2000);
 });
